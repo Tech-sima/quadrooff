@@ -5,21 +5,36 @@ const { v4: uuidv4 } = require('uuid');
 
 class TelegramBotHandler {
     constructor() {
-        this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-        this.db = new Database();
-        this.googleSheets = new GoogleSheets();
-        this.userStates = new Map(); // Для отслеживания состояния пользователей
-        this.getLanguage = (userInfo) => {
-            const code = (userInfo && userInfo.language_code) ? userInfo.language_code.toLowerCase() : '';
-            return code && code.startsWith('en') ? 'en' : 'ru';
-        };
-        this.setupHandlers();
-        this.initializeAdmin();
-        
-        // Убеждаемся, что заголовки есть в таблице при запуске
-        setTimeout(() => {
-            this.googleSheets.ensureHeaders();
-        }, 2000);
+        try {
+            this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+            this.db = new Database();
+            this.googleSheets = new GoogleSheets();
+            this.userStates = new Map(); // Для отслеживания состояния пользователей
+            this.getLanguage = (userInfo) => {
+                const code = (userInfo && userInfo.language_code) ? userInfo.language_code.toLowerCase() : '';
+                return code && code.startsWith('en') ? 'en' : 'ru';
+            };
+            
+            // Обработка ошибок бота
+            this.bot.on('error', (error) => {
+                console.error('❌ Ошибка Telegram бота:', error.message);
+            });
+            
+            this.bot.on('polling_error', (error) => {
+                console.error('❌ Ошибка polling Telegram бота:', error.message);
+            });
+            
+            this.setupHandlers();
+            this.initializeAdmin();
+            
+            // Убеждаемся, что заголовки есть в таблице при запуске
+            setTimeout(() => {
+                this.googleSheets.ensureHeaders();
+            }, 2000);
+        } catch (error) {
+            console.error('❌ Ошибка при инициализации Telegram бота:', error);
+            throw error;
+        }
     }
 
     async initializeAdmin() {

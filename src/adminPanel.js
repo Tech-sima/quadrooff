@@ -19,6 +19,11 @@ class AdminPanel {
     }
 
     setupRoutes() {
+        // Health check endpoint для Koyeb
+        this.app.get('/health', (req, res) => {
+            res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+        });
+
         // Главная страница
         this.app.get('/', (req, res) => {
             res.sendFile(path.join(__dirname, '../public/index.html'));
@@ -92,8 +97,12 @@ class AdminPanel {
     }
 
     start(port = 3000) {
-        this.app.listen(port, () => {
-            console.log(`🌐 Админ панель запущена на http://localhost:${port}`);
+        this.app.listen(port, '0.0.0.0', (err) => {
+            if (err) {
+                console.error('❌ Ошибка при запуске админ панели:', err);
+                process.exit(1);
+            }
+            console.log(`🌐 Админ панель запущена на http://0.0.0.0:${port}`);
         });
     }
 }

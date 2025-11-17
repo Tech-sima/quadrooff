@@ -54,4 +54,7 @@ process.on('SIGTERM', () => {
 
 // Запуск приложения
 const app = new Application();
-app.start();
+app.start().catch((error) => {
+    console.error('❌ Критическая ошибка при запуске:', error);
+    process.exit(1);
+});
