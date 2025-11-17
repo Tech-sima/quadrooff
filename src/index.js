@@ -35,6 +35,12 @@ class Application {
             console.log(`📊 База данных: ${process.env.DATABASE_PATH || './database.sqlite'}`);
             console.log(`🔑 TELEGRAM_BOT_TOKEN установлен: ${process.env.TELEGRAM_BOT_TOKEN ? '✅ Да' : '❌ Нет'}`);
             
+            // Запускаем polling после небольшой задержки
+            setTimeout(() => {
+                console.log('🔄 Запуск Telegram bot polling...');
+                this.bot.startPolling();
+            }, 2000);
+            
             // Проверяем что бот действительно работает
             setTimeout(async () => {
                 try {
@@ -47,7 +53,7 @@ class Application {
                     console.error('2. Доступность Telegram API с сервера');
                     console.error('3. Логи на наличие ошибок polling');
                 }
-            }, 3000);
+            }, 5000);
 
         } catch (error) {
             console.error('❌ Ошибка при запуске приложения:', error);
@@ -56,19 +62,28 @@ class Application {
     }
 }
 
+// Создаем экземпляр приложения
+let app;
+
 // Обработка завершения процесса
 process.on('SIGINT', () => {
     console.log('\n🛑 Получен сигнал завершения. Завершение работы...');
+    if (app && app.bot) {
+        app.bot.stopPolling();
+    }
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
     console.log('\n🛑 Получен сигнал завершения. Завершение работы...');
+    if (app && app.bot) {
+        app.bot.stopPolling();
+    }
     process.exit(0);
 });
 
 // Запуск приложения
-const app = new Application();
+app = new Application();
 app.start().catch((error) => {
     console.error('❌ Критическая ошибка при запуске:', error);
     process.exit(1);

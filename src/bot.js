@@ -6,10 +6,16 @@ const { v4: uuidv4 } = require('uuid');
 class TelegramBotHandler {
     constructor() {
         try {
-            this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+            // Создаем бота БЕЗ автоматического polling
+            this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
             this.db = new Database();
             this.googleSheets = new GoogleSheets();
             this.userStates = new Map(); // Для отслеживания состояния пользователей
+            this.pollingStarted = false;
+            this.isPolling = false;
+            this.reconnectAttempts = 0;
+            this.maxReconnectAttempts = 5;
+            
             this.getLanguage = (userInfo) => {
                 const code = (userInfo && userInfo.language_code) ? userInfo.language_code.toLowerCase() : '';
                 return code && code.startsWith('en') ? 'en' : 'ru';
@@ -24,14 +30,36 @@ class TelegramBotHandler {
             this.bot.on('polling_error', (error) => {
                 console.error('❌ Ошибка polling Telegram бота:', error.message);
                 console.error('Код ошибки:', error.code);
-                // Не останавливаем приложение при ошибке polling
-                if (error.code === 'ETELEGRAM' || error.code === 'EFATAL') {
+                
+                // Обработка ошибки 409 - конфликт (несколько экземпляров)
+                if (error.code === 'ETELEGRAM' && error.response && error.response.statusCode === 409) {
+                    console.error('⚠️  Обнаружен конфликт: другой экземпляр бота уже запущен!');
+                    console.error('💡 Решение:');
+                    console.error('   1. Убедитесь, что бот не запущен локально');
+                    console.error('   2. Проверьте настройки Render - должен быть только 1 инстанс');
+                    console.error('   3. Подождите 10 секунд и перезапустите деплой');
+                    
+                    // Останавливаем текущий polling
+                    this.stopPolling();
+                    
+                    // Пытаемся переподключиться через больше времени
+                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                        this.reconnectAttempts++;
+                        const delay = 10000 * this.reconnectAttempts; // Увеличиваем задержку с каждой попыткой
+                        console.error(`🔄 Попытка переподключения #${this.reconnectAttempts} через ${delay/1000} секунд...`);
+                        setTimeout(() => {
+                            this.startPolling();
+                        }, delay);
+                    } else {
+                        console.error('❌ Превышено максимальное количество попыток переподключения');
+                        console.error('⚠️  Проверьте, что только один экземпляр бота запущен');
+                    }
+                } else if (error.code === 'ETELEGRAM' || error.code === 'EFATAL') {
                     console.error('⚠️  Критическая ошибка polling. Попытка переподключения через 5 секунд...');
+                    this.stopPolling();
                     setTimeout(() => {
                         console.log('🔄 Перезапуск polling...');
-                        this.bot.startPolling().catch(err => {
-                            console.error('❌ Не удалось перезапустить polling:', err.message);
-                        });
+                        this.startPolling();
                     }, 5000);
                 }
             });
@@ -1117,6 +1145,58 @@ class TelegramBotHandler {
                 console.error('Ошибка при получении заявок:', error);
                 this.bot.sendMessage(chatId, 'Произошла ошибка при получении заявок.');
             }
+        }
+    }
+
+    // Метод для запуска polling
+    startPolling() {
+        if (this.isPolling) {
+            console.log('⚠️  Polling уже запущен');
+            return;
+        }
+
+        console.log('🔄 Запуск polling...');
+        this.reconnectAttempts = 0; // Сбрасываем счетчик при успешном запуске
+        
+        try {
+            this.bot.startPolling({
+                restart: true,
+                polling: {
+                    interval: 1000,
+                    params: {
+                        timeout: 10
+                    }
+                }
+            });
+            
+            this.isPolling = true;
+            console.log('✅ Polling запущен');
+        } catch (error) {
+            console.error('❌ Ошибка при запуске polling:', error.message);
+            this.isPolling = false;
+            
+            // Если ошибка 409, она будет обработана в polling_error
+            if (error.code === 'ETELEGRAM' && error.response && error.response.statusCode === 409) {
+                console.error('⚠️  Конфликт обнаружен при запуске polling');
+            }
+        }
+    }
+
+    // Метод для остановки polling
+    stopPolling() {
+        if (!this.isPolling) {
+            return;
+        }
+
+        console.log('🛑 Остановка polling...');
+        try {
+            this.bot.stopPolling();
+            this.isPolling = false;
+            this.pollingStarted = false;
+            console.log('✅ Polling остановлен');
+        } catch (error) {
+            console.error('❌ Ошибка при остановке polling:', error.message);
+            this.isPolling = false;
         }
     }
 }
