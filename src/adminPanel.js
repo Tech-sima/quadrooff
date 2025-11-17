@@ -19,36 +19,9 @@ class AdminPanel {
     }
 
     setupRoutes() {
-        // Health check endpoint для Stormkit и других платформ
-        this.app.get('/health', async (req, res) => {
-            try {
-                const botStatus = this.bot ? this.bot.getStatus() : null;
-                const healthStatus = {
-                    status: 'ok',
-                    timestamp: new Date().toISOString(),
-                    bot: botStatus ? {
-                        isPollingActive: botStatus.isPollingActive,
-                        pollingStarted: botStatus.pollingStarted,
-                        reconnectAttempts: botStatus.reconnectAttempts,
-                        timeSinceLastMessage: Math.floor(botStatus.timeSinceLastMessage / 1000) + 's'
-                    } : null
-                };
-                
-                // Если бот не активен более 10 минут, возвращаем warning
-                if (botStatus && !botStatus.isPollingActive && botStatus.timeSinceLastMessage > 10 * 60 * 1000) {
-                    healthStatus.status = 'warning';
-                    healthStatus.message = 'Bot polling is not active';
-                }
-                
-                res.status(200).json(healthStatus);
-            } catch (error) {
-                console.error('Ошибка при проверке здоровья:', error);
-                res.status(500).json({ 
-                    status: 'error', 
-                    timestamp: new Date().toISOString(),
-                    error: error.message 
-                });
-            }
+        // Health check endpoint для Koyeb
+        this.app.get('/health', (req, res) => {
+            res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
         });
 
         // Главная страница

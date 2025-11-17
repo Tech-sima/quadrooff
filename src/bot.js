@@ -6,26 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 class TelegramBotHandler {
     constructor() {
         try {
-            this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { 
-                polling: {
-                    interval: 1000,
-                    autoStart: true,
-                    params: {
-                        timeout: 10
-                    }
-                }
-            });
+            this.bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
             this.db = new Database();
             this.googleSheets = new GoogleSheets();
             this.userStates = new Map(); // Для отслеживания состояния пользователей
-            this.pollingStarted = false;
-            this.isPollingActive = false;
-            this.reconnectAttempts = 0;
-            this.maxReconnectAttempts = 10;
-            this.reconnectDelay = 5000; // 5 секунд
-            this.healthCheckInterval = null;
-            this.lastMessageTime = Date.now();
-            
             this.getLanguage = (userInfo) => {
                 const code = (userInfo && userInfo.language_code) ? userInfo.language_code.toLowerCase() : '';
                 return code && code.startsWith('en') ? 'en' : 'ru';
@@ -35,69 +19,43 @@ class TelegramBotHandler {
             this.bot.on('error', (error) => {
                 console.error('❌ Ошибка Telegram бота:', error.message);
                 console.error('Детали ошибки:', error);
-                this.isPollingActive = false;
             });
             
             this.bot.on('polling_error', (error) => {
                 console.error('❌ Ошибка polling Telegram бота:', error.message);
                 console.error('Код ошибки:', error.code);
-                this.isPollingActive = false;
-                
-                // Переподключение при любых ошибках polling
-                if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                    this.reconnectAttempts++;
-                    const delay = this.reconnectDelay * Math.min(this.reconnectAttempts, 5);
-                    console.error(`⚠️  Попытка переподключения ${this.reconnectAttempts}/${this.maxReconnectAttempts} через ${delay/1000} секунд...`);
-                    
+                // Не останавливаем приложение при ошибке polling
+                if (error.code === 'ETELEGRAM' || error.code === 'EFATAL') {
+                    console.error('⚠️  Критическая ошибка polling. Попытка переподключения через 5 секунд...');
                     setTimeout(() => {
-                        this.restartPolling();
-                    }, delay);
-                } else {
-                    console.error('❌ Достигнуто максимальное количество попыток переподключения. Бот остановлен.');
-                    // Сбрасываем счетчик через час для новой попытки
-                    setTimeout(() => {
-                        this.reconnectAttempts = 0;
-                        console.log('🔄 Счетчик попыток переподключения сброшен. Попытка перезапуска...');
-                        this.restartPolling();
-                    }, 3600000); // 1 час
+                        console.log('🔄 Перезапуск polling...');
+                        this.bot.startPolling().catch(err => {
+                            console.error('❌ Не удалось перезапустить polling:', err.message);
+                        });
+                    }, 5000);
                 }
             });
             
-            // Отслеживание успешных сообщений
+            // Подтверждение успешного запуска polling
             this.bot.on('message', (msg) => {
-                this.lastMessageTime = Date.now();
-                this.isPollingActive = true;
-                
-                // Подтверждение успешного запуска polling
+                // Это событие сработает только если polling работает
                 if (!this.pollingStarted) {
                     this.pollingStarted = true;
-                    this.reconnectAttempts = 0; // Сбрасываем счетчик при успешном запуске
                     console.log('✅ Telegram бот успешно запущен и готов к работе!');
                 }
-            });
-            
-            // Отслеживание callback queries
-            this.bot.on('callback_query', () => {
-                this.lastMessageTime = Date.now();
-                this.isPollingActive = true;
             });
             
             // Логирование успешного подключения
             this.bot.getMe().then((botInfo) => {
                 console.log(`✅ Telegram бот подключен: @${botInfo.username} (${botInfo.first_name})`);
                 console.log(`📱 Bot ID: ${botInfo.id}`);
-                console.log(`🔄 Polling настроен: interval=1000ms, timeout=10s`);
-                this.isPollingActive = true;
             }).catch((error) => {
                 console.error('❌ Не удалось получить информацию о боте:', error.message);
                 console.error('Проверьте правильность TELEGRAM_BOT_TOKEN');
-                console.error('Stack trace:', error.stack);
-                this.isPollingActive = false;
             });
             
             this.setupHandlers();
             this.initializeAdmin();
-            this.startHealthCheck();
             
             // Убеждаемся, что заголовки есть в таблице при запуске
             setTimeout(() => {
@@ -107,87 +65,6 @@ class TelegramBotHandler {
             console.error('❌ Ошибка при инициализации Telegram бота:', error);
             throw error;
         }
-    }
-    
-    async restartPolling() {
-        try {
-            console.log(`🔄 [${new Date().toISOString()}] Остановка текущего polling...`);
-            await this.bot.stopPolling().catch((err) => {
-                console.warn('⚠️  Предупреждение при остановке polling:', err.message);
-            });
-            
-            // Небольшая задержка перед перезапуском
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            console.log(`🔄 [${new Date().toISOString()}] Запуск нового polling...`);
-            await this.bot.startPolling({
-                interval: 1000,
-                params: {
-                    timeout: 10
-                }
-            });
-            
-            this.isPollingActive = true;
-            this.reconnectAttempts = 0; // Сбрасываем счетчик при успешном перезапуске
-            console.log(`✅ [${new Date().toISOString()}] Polling перезапущен успешно`);
-        } catch (error) {
-            console.error(`❌ [${new Date().toISOString()}] Ошибка при перезапуске polling:`, error.message);
-            console.error('Stack trace:', error.stack);
-            this.isPollingActive = false;
-        }
-    }
-    
-    startHealthCheck() {
-        // Проверка состояния бота каждые 30 секунд
-        this.healthCheckInterval = setInterval(async () => {
-            try {
-                // Проверяем, что бот все еще отвечает
-                const botInfo = await this.bot.getMe();
-                
-                // Проверяем, что polling активен (были сообщения за последние 5 минут)
-                const timeSinceLastMessage = Date.now() - this.lastMessageTime;
-                const pollingTimeout = 5 * 60 * 1000; // 5 минут
-                
-                if (timeSinceLastMessage > pollingTimeout && this.pollingStarted) {
-                    console.warn(`⚠️  [${new Date().toISOString()}] Долгое время нет сообщений (${Math.floor(timeSinceLastMessage / 1000)}s). Проверяю состояние polling...`);
-                    // Проверяем состояние polling
-                    if (!this.isPollingActive) {
-                        console.warn(`⚠️  [${new Date().toISOString()}] Polling неактивен. Перезапуск...`);
-                        await this.restartPolling();
-                    }
-                }
-                
-                // Обновляем статус
-                this.isPollingActive = true;
-                
-                // Периодически логируем статус (каждые 5 минут)
-                if (Date.now() % (5 * 60 * 1000) < 30000) {
-                    console.log(`💚 [${new Date().toISOString()}] Health check OK - Bot: @${botInfo.username}, Polling: ${this.isPollingActive ? 'active' : 'inactive'}`);
-                }
-            } catch (error) {
-                console.error(`❌ [${new Date().toISOString()}] Ошибка при проверке здоровья бота:`, error.message);
-                this.isPollingActive = false;
-                
-                // Пытаемся перезапустить polling
-                if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                    this.reconnectAttempts++;
-                    console.log(`🔄 [${new Date().toISOString()}] Попытка перезапуска после ошибки health check (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-                    await this.restartPolling();
-                }
-            }
-        }, 30000); // Каждые 30 секунд
-        
-        console.log('💚 Health check механизм запущен (каждые 30 секунд)');
-    }
-    
-    getStatus() {
-        return {
-            isPollingActive: this.isPollingActive,
-            pollingStarted: this.pollingStarted,
-            reconnectAttempts: this.reconnectAttempts,
-            lastMessageTime: this.lastMessageTime,
-            timeSinceLastMessage: Date.now() - this.lastMessageTime
-        };
     }
 
     async initializeAdmin() {
